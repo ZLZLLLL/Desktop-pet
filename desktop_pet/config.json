@@ -1,0 +1,15 @@
+{
+  "window": {
+    "width": 200,
+    "height": 200,
+    "default_position": "bottom_right",
+    "margin": 50
+  },
+  "animations": {
+    "idle":    { "fps": 8,  "loop": true  },
+    "run":     { "fps": 12, "loop": false },
+    "jump":    { "fps": 10, "loop": false },
+    "click":   { "fps": 10, "loop": false },
+    "levelup": { "fps": 10, "loop": false }
+  }
+}
