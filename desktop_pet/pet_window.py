@@ -4,9 +4,9 @@ import random
 from ctypes import wintypes
 from pathlib import Path
 
-from PyQt6.QtWidgets import QWidget, QLabel, QApplication
+from PyQt6.QtWidgets import QWidget, QLabel, QApplication, QMenu
 from PyQt6.QtCore import Qt, QTimer, QPoint, QAbstractNativeEventFilter
-from PyQt6.QtGui import QPixmap, QColor, QFont, QPainter, QPalette, QEnterEvent
+from PyQt6.QtGui import QPixmap, QColor, QFont, QPainter, QPalette, QEnterEvent, QCursor, QAction
 
 from state_machine import StateMachine
 from intimacy import Intimacy
@@ -181,6 +181,8 @@ class PetWindow(QWidget):
         self._init_timer()
         self._init_click_detection()
         self._animation_started = False
+        self._feeding_mode = False
+        self._feed_eat_cooldown = False
 
         # Bubble
         self.bubble = BubbleLabel()
@@ -193,6 +195,10 @@ class PetWindow(QWidget):
         self._dialog_chain_timer = QTimer()
         self._dialog_chain_timer.setSingleShot(True)
         self._dialog_chain_timer.timeout.connect(self._show_next_dialog_in_chain)
+
+        self._feed_timer = QTimer()
+        self._feed_timer.setInterval(60)
+        self._feed_timer.timeout.connect(self._follow_mouse_when_feeding)
 
         # 初始化完成后在 showEvent 中再启动动画，避免窗口创建阶段设置 mask
 
@@ -315,15 +321,22 @@ class PetWindow(QWidget):
         self._timer = QTimer()
         self._timer.timeout.connect(self._advance_frame)
 
-    def _start_animation(self, state_name: str):
+    def _start_animation(self, state_name: str, force_loop: bool | None = None, force_play_times: int | None = None):
         if state_name not in self._animations:
             state_name = "sleep" if "sleep" in self._animations else "idle"
         self._current_state = state_name
         self._current_frame = 0
+
+        # 默认待机改为静态首帧展示，不再循环播放
+        if state_name == "sleep":
+            self._timer.stop()
+            self._update_frame()
+            return
+
         anim_cfg = self._config["animations"].get(state_name, {})
         self._fps = anim_cfg.get("fps", 1 if state_name == "sleep" else 8)
-        self._loop = anim_cfg.get("loop", state_name in ("sleep", "idle"))
-        play_times = anim_cfg.get("play_times", 1)
+        self._loop = anim_cfg.get("loop", state_name in ("sleep", "idle")) if force_loop is None else force_loop
+        play_times = anim_cfg.get("play_times", 1) if force_play_times is None else force_play_times
         self._remaining_loops = max(1, int(play_times))
 
         self._timer.stop()
@@ -346,6 +359,10 @@ class PetWindow(QWidget):
                     self._current_frame = 0
                 else:
                     self._timer.stop()
+                    if self._feeding_mode and self._current_state == "click":
+                        self._feed_eat_cooldown = False
+                        self._start_animation("run", force_loop=True, force_play_times=999999)
+                        return
                     idle_state = self.state_machine.on_animation_done()
                     self._start_animation(idle_state)
                     return
@@ -409,6 +426,69 @@ class PetWindow(QWidget):
         if self._dialog_chain_queue:
             self._dialog_chain_timer.start(self._bubble_timer.interval() + 250)
 
+    def _start_feeding_mode(self):
+        self._feeding_mode = True
+        self._feed_eat_cooldown = False
+        self._dialog_chain_queue.clear()
+        self._dialog_chain_timer.stop()
+        self._start_animation("run", force_loop=True, force_play_times=999999)
+        self._feed_timer.start()
+        self._show_bubble("喂食中，跟着鼠标跑！")
+
+    def _stop_feeding_mode(self):
+        self._feeding_mode = False
+        self._feed_eat_cooldown = False
+        self._feed_timer.stop()
+        self._dialog_chain_queue.clear()
+        self._dialog_chain_timer.stop()
+        self._start_animation("sleep")
+        self._show_bubble("已取消喂食")
+
+    def _follow_mouse_when_feeding(self):
+        if not self._feeding_mode:
+            return
+
+        cursor = QCursor.pos()
+        target = QPoint(cursor.x() - self.width() // 2, cursor.y() - self.height() // 2)
+        pos = self.pos()
+
+        dx = target.x() - pos.x()
+        dy = target.y() - pos.y()
+        dist2 = dx * dx + dy * dy
+
+        # 缓慢追踪
+        step = 5
+        if dist2 > step * step:
+            # 吃东西动画播放中时，不要被追踪逻辑打断
+            if self._current_state == "click":
+                return
+            import math
+            dist = math.sqrt(dist2)
+            move_x = int(round(dx / dist * step))
+            move_y = int(round(dy / dist * step))
+            self.move(pos.x() + move_x, pos.y() + move_y)
+            self._update_bubble_position()
+            if self._current_state != "run":
+                self._start_animation("run", force_loop=True, force_play_times=999999)
+            return
+
+        # 追上后播放吃东西动画
+        if not self._feed_eat_cooldown:
+            self._feed_eat_cooldown = True
+            self._start_animation("click", force_loop=False, force_play_times=1)
+            self._show_bubble("开吃！")
+
+    def _show_context_menu(self, global_pos: QPoint):
+        menu = QMenu(self)
+        if self._feeding_mode:
+            action_feed = QAction("取消喂食", self)
+            action_feed.triggered.connect(self._stop_feeding_mode)
+        else:
+            action_feed = QAction("喂食", self)
+            action_feed.triggered.connect(self._start_feeding_mode)
+        menu.addAction(action_feed)
+        menu.exec(global_pos)
+
     def _update_bubble_position(self):
         if self.bubble.isVisible():
             pos = self.pos()
@@ -430,6 +510,9 @@ class PetWindow(QWidget):
         self._drag_pos = QPoint()
 
     def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.RightButton:
+            self._show_context_menu(event.globalPosition().toPoint())
+            return
         if event.button() == Qt.MouseButton.LeftButton:
             self.is_dragging = False
             self._drag_start = event.globalPosition().toPoint()
