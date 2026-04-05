@@ -6,11 +6,11 @@ from data_manager import DataManager
 class Intimacy:
     LEVEL_THRESHOLDS = {1: (0, 20), 2: (21, 40), 3: (41, 60), 4: (61, 80), 5: (81, 100)}
     LEVEL_UNLOCKS = {
-        1: ["idle", "click"],
-        2: ["idle", "click", "run"],
-        3: ["idle", "click", "run", "jump"],
-        4: ["idle", "click", "run", "jump"],
-        5: ["idle", "click", "run", "jump", "levelup"],
+        1: ["sleep", "click"],
+        2: ["sleep", "click", "run"],
+        3: ["sleep", "click", "run", "jump"],
+        4: ["sleep", "click", "run", "jump"],
+        5: ["sleep", "click", "run", "jump", "levelup"],
     }
     LEVEL_NAMES = {
         1: "陌生人",
