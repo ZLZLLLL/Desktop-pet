@@ -122,11 +122,32 @@ class BubbleLabel(QLabel):
             "color: #333;"
             "font-size: 12px;"
         )
-        self.setFixedSize(138, 48)
+        self._max_text_width = 220
+        self._min_width = 138
+        self._min_height = 48
+        self.setFixedSize(self._min_width, self._min_height)
         self.setText("")
+
+    def _resize_to_text(self, text: str):
+        metrics = self.fontMetrics()
+        padding_w = 24  # 左右 padding + 边框余量
+        padding_h = 18  # 上下 padding + 边框余量
+
+        rect = metrics.boundingRect(
+            0,
+            0,
+            self._max_text_width,
+            2000,
+            int(Qt.AlignmentFlag.AlignCenter) | int(Qt.TextFlag.TextWordWrap),
+            text,
+        )
+        width = max(self._min_width, min(self._max_text_width + padding_w, rect.width() + padding_w))
+        height = max(self._min_height, rect.height() + padding_h)
+        self.setFixedSize(width, height)
 
     def setText(self, text: str):
         self._text = text
+        self._resize_to_text(text)
 
     def paintEvent(self, event):
         painter = QPainter(self)
@@ -138,7 +159,7 @@ class BubbleLabel(QLabel):
         painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, self._text)
 
     def show_text(self, text: str, pos: QPoint):
-        self._text = text
+        self.setText(text)
         self.repaint()
         self.move(pos.x(), pos.y() - self.height() - 10)
         self.show()
@@ -169,11 +190,13 @@ class PetWindow(QWidget):
 
         self._config = self._load_config()
         self._animations: dict[str, list[QPixmap]] = {}
+        self._standby_frames: list[QPixmap] = []
         self._current_state = "sleep"
         self._current_frame = 0
         self._fps = 1
         self._loop = True
         self._remaining_loops = 0
+        self._queued_animation: tuple[str, int | None] | None = None
 
         self._init_window()
         self._load_animations()
@@ -304,6 +327,28 @@ class PetWindow(QWidget):
                 frames.append(self._generate_placeholder(w, h, colors.get(state_name, QColor(200, 200, 200))))
             self._animations[state_name] = frames
 
+        self._standby_frames = []
+        sleep_frames = self._animations.get("sleep", [])
+        if sleep_frames:
+            self._standby_frames.append(sleep_frames[0])
+
+        standby_paths = [
+            self.ASSETS_PATH / "kungfu" / "0005.png",
+            self.ASSETS_PATH / "victory" / "0001.png",
+        ]
+        for p in standby_paths:
+            if p.exists():
+                pm = QPixmap(str(p)).scaled(
+                    w, h,
+                    Qt.AspectRatioMode.IgnoreAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation,
+                )
+                if not pm.isNull():
+                    self._standby_frames.append(pm)
+
+        if not self._standby_frames:
+            self._standby_frames.append(self._generate_placeholder(w, h, QColor(100, 180, 255)))
+
     def _init_ui(self):
         self._label = QLabel(self)
         self._label.setGeometry(0, 0, self.width(), self.height())
@@ -321,20 +366,26 @@ class PetWindow(QWidget):
         self._timer = QTimer()
         self._timer.timeout.connect(self._advance_frame)
 
-    def _start_animation(self, state_name: str, force_loop: bool | None = None, force_play_times: int | None = None):
+    def _start_animation(
+        self,
+        state_name: str,
+        force_loop: bool | None = None,
+        force_play_times: int | None = None,
+        force_fps: int | None = None,
+    ):
         if state_name not in self._animations:
             state_name = "sleep" if "sleep" in self._animations else "idle"
         self._current_state = state_name
         self._current_frame = 0
 
-        # 默认待机改为静态首帧展示，不再循环播放
+        # 待机时随机展示一张静态帧
         if state_name == "sleep":
             self._timer.stop()
-            self._update_frame()
+            self._show_random_standby_frame()
             return
 
         anim_cfg = self._config["animations"].get(state_name, {})
-        self._fps = anim_cfg.get("fps", 1 if state_name == "sleep" else 8)
+        self._fps = max(1, int(force_fps)) if force_fps is not None else anim_cfg.get("fps", 1 if state_name == "sleep" else 8)
         self._loop = anim_cfg.get("loop", state_name in ("sleep", "idle")) if force_loop is None else force_loop
         play_times = anim_cfg.get("play_times", 1) if force_play_times is None else force_play_times
         self._remaining_loops = max(1, int(play_times))
@@ -344,6 +395,26 @@ class PetWindow(QWidget):
         self._timer.setInterval(interval)
         self._timer.start()
         self._update_frame()
+
+    def _apply_frame(self, frame: QPixmap):
+        self._label.setPixmap(frame)
+
+        mask = frame.mask()
+        if mask and not mask.isNull():
+            self.setMask(mask)
+        else:
+            img = frame.toImage()
+            if img.hasAlphaChannel():
+                alpha_mask = img.createAlphaMask()
+                if not alpha_mask.isNull():
+                    self.setMask(QPixmap.fromImage(alpha_mask))
+
+    def _show_random_standby_frame(self):
+        if not self._standby_frames:
+            self._update_frame()
+            return
+        frame = random.choice(self._standby_frames)
+        self._apply_frame(frame)
 
     def _advance_frame(self):
         frames = self._animations.get(self._current_state, [])
@@ -363,6 +434,11 @@ class PetWindow(QWidget):
                         self._feed_eat_cooldown = False
                         self._start_animation("run", force_loop=True, force_play_times=999999)
                         return
+                    if self._queued_animation is not None:
+                        next_state, next_fps = self._queued_animation
+                        self._queued_animation = None
+                        self._start_animation(next_state, force_loop=False, force_play_times=1, force_fps=next_fps)
+                        return
                     idle_state = self.state_machine.on_animation_done()
                     self._start_animation(idle_state)
                     return
@@ -373,19 +449,7 @@ class PetWindow(QWidget):
         if frames:
             idx = min(self._current_frame, len(frames) - 1)
             frame = frames[idx]
-            self._label.setPixmap(frame)
-
-            # 使用帧自带的 mask() 方法
-            mask = frame.mask()
-            if mask and not mask.isNull():
-                self.setMask(mask)
-            else:
-                # 如果帧没有 mask，使用 alpha mask
-                img = frame.toImage()
-                if img.hasAlphaChannel():
-                    alpha_mask = img.createAlphaMask()
-                    if not alpha_mask.isNull():
-                        self.setMask(QPixmap.fromImage(alpha_mask))
+            self._apply_frame(frame)
 
     # ─── Bubble ──────────────────────────────────────────────
 
@@ -397,8 +461,8 @@ class PetWindow(QWidget):
         self._bubble_timer.stop()
         self._bubble_timer.start()
 
-    def _queue_dialog_chain(self, level: int):
-        first = self.dialog_system.get_dialog(level)
+    def _queue_dialog_chain(self, intimacy: int):
+        first = self.dialog_system.get_dialog_by_intimacy(intimacy)
         if not first:
             return
 
@@ -406,7 +470,7 @@ class PetWindow(QWidget):
         count = 1 + random.randint(0, 2)
         lines = [first]
         for _ in range(count - 1):
-            extra = self.dialog_system.get_dialog(level)
+            extra = self.dialog_system.get_dialog_by_intimacy(intimacy)
             if extra:
                 lines.append(extra)
 
@@ -426,14 +490,35 @@ class PetWindow(QWidget):
         if self._dialog_chain_queue:
             self._dialog_chain_timer.start(self._bubble_timer.interval() + 250)
 
+    def _get_level_short_text(self) -> str:
+        lvl = self.intimacy_system.get_current_level()
+        return f"Lv.{lvl}"
+
+    def _show_intimacy_status(self):
+        val = self.data_manager.get_intimacy()
+        lvl = self.intimacy_system.get_current_level()
+        name = self.intimacy_system.get_level_name()
+        self._show_bubble(f"我们现在的亲密度是 {val}/100，等级是 Lv.{lvl} {name}。")
+
     def _start_feeding_mode(self):
+        val, level_up = self.intimacy_system.add_feed_intimacy()
         self._feeding_mode = True
         self._feed_eat_cooldown = False
         self._dialog_chain_queue.clear()
         self._dialog_chain_timer.stop()
         self._start_animation("run", force_loop=True, force_play_times=999999)
         self._feed_timer.start()
-        self._show_bubble("喂食中，跟着鼠标跑！")
+        text = self.dialog_system.get_feeding_dialog(val)
+        if level_up:
+            level_text = self.dialog_system.get_levelup_dialog()
+            if level_text:
+                text = f"{level_text}（喂食+10）"
+            else:
+                text = "关系更近啦！（喂食+10）"
+        else:
+            text = f"{text}（喂食+10）" if text else "喂食中，跟着鼠标跑！（喂食+10）"
+        level_short = self._get_level_short_text()
+        self._show_bubble(f"{text}\n{level_short}")
 
     def _stop_feeding_mode(self):
         self._feeding_mode = False
@@ -487,6 +572,27 @@ class PetWindow(QWidget):
             action_feed = QAction("喂食", self)
             action_feed.triggered.connect(self._start_feeding_mode)
         menu.addAction(action_feed)
+
+        action_status = QAction("查看亲密度", self)
+        action_status.triggered.connect(self._show_intimacy_status)
+        menu.addAction(action_status)
+
+        action_impactball = QAction("冲击球", self)
+        action_impactball.triggered.connect(self._do_impactball)
+        menu.addAction(action_impactball)
+
+        action_kungfu = QAction("功夫", self)
+        action_kungfu.triggered.connect(self._do_kungfu)
+        menu.addAction(action_kungfu)
+
+        action_fight = QAction("打怪兽", self)
+        action_fight.triggered.connect(self._do_fight)
+        menu.addAction(action_fight)
+
+        action_victory = QAction("战斗胜利", self)
+        action_victory.triggered.connect(self._do_victory)
+        menu.addAction(action_victory)
+
         menu.exec(global_pos)
 
     def _update_bubble_position(self):
@@ -495,6 +601,42 @@ class PetWindow(QWidget):
             bx = pos.x() + self.width() // 2 - self.bubble.width() // 2
             by = pos.y()
             self.bubble.move(bx, by - self.bubble.height() - 10)
+
+    def _do_impactball(self):
+        if "impactball" in self._animations and self._animations["impactball"]:
+            self._start_animation("impactball", force_loop=False, force_play_times=1, force_fps=2)
+            self._show_bubble("看我的冲击球！")
+        else:
+            self._show_bubble("冲击球还没学会哦")
+
+    def _do_kungfu(self):
+        if "kungfu" in self._animations and self._animations["kungfu"]:
+            self._start_animation("kungfu", force_loop=False, force_play_times=1, force_fps=2)
+            self._show_bubble("哈！功夫！")
+        else:
+            self._show_bubble("功夫还没学会哦")
+
+    def _do_fight(self):
+        if "fight" in self._animations and self._animations["fight"]:
+            if "victory" in self._animations and self._animations["victory"]:
+                self._queued_animation = ("victory", 2)
+            else:
+                self._queued_animation = None
+            self._start_animation("fight", force_loop=False, force_play_times=1, force_fps=2)
+            self._show_battle_bubble()
+        else:
+            self._show_bubble("打怪兽还没学会哦")
+
+    def _do_victory(self):
+        if "victory" in self._animations and self._animations["victory"]:
+            self._start_animation("victory", force_loop=False, force_play_times=1, force_fps=2)
+            self._show_bubble("胜利！耶！")
+        else:
+            self._show_bubble("胜利姿势还没学会哦")
+
+    def _show_battle_bubble(self):
+        texts = ["冲啊！", "看招！", "打败你！"]
+        self._show_bubble(random.choice(texts))
 
     # ─── Mouse events ────────────────────────────────────────
 
@@ -550,7 +692,7 @@ class PetWindow(QWidget):
             return
         state = self.state_machine.on_click(self.intimacy_system.get_unlocked_animations())
         self._start_animation(state)
-        self._queue_dialog_chain(self.intimacy_system.get_current_level())
+        self._queue_dialog_chain(val)
 
     def _handle_double_click(self):
         val, level_up = self.intimacy_system.add_double_click_intimacy()
@@ -559,7 +701,7 @@ class PetWindow(QWidget):
             return
         state = self.state_machine.on_double_click(self.intimacy_system.get_unlocked_animations())
         self._start_animation(state)
-        self._queue_dialog_chain(self.intimacy_system.get_current_level())
+        self._queue_dialog_chain(val)
 
     def _trigger_level_up(self):
         self._start_animation("levelup")

@@ -30,9 +30,48 @@ class DialogBubble:
         lines = self._dialogs.get(key, [])
         return random.choice(lines) if lines else ""
 
+    def _get_intimacy_pool(self, intimacy: int) -> list[str]:
+        pools = self._dialogs.get("intimacy_pools", {})
+        if not isinstance(pools, dict):
+            return []
+
+        unlocked: list[str] = []
+        for k, lines in pools.items():
+            try:
+                threshold = int(k)
+            except (TypeError, ValueError):
+                continue
+            if intimacy >= threshold and isinstance(lines, list):
+                unlocked.extend([str(line) for line in lines if isinstance(line, str) and line.strip()])
+        return unlocked
+
     def get_dialog(self, level: int) -> str:
         name = self.LEVEL_NAMES.get(level, "stranger")
         return self._pick(name)
+
+    def get_dialog_by_intimacy(self, intimacy: int) -> str:
+        pool = self._get_intimacy_pool(intimacy)
+        if pool:
+            return random.choice(pool)
+
+        # 兼容旧配置：若未配置好感度池，回退到等级对话。
+        if intimacy <= 20:
+            return self.get_dialog(1)
+        if intimacy <= 40:
+            return self.get_dialog(2)
+        if intimacy <= 60:
+            return self.get_dialog(3)
+        if intimacy <= 80:
+            return self.get_dialog(4)
+        return self.get_dialog(5)
+
+    def get_feeding_dialog(self, intimacy: int) -> str:
+        feeding_lines = self._dialogs.get("feeding", [])
+        if isinstance(feeding_lines, list) and feeding_lines:
+            picked = random.choice([str(line) for line in feeding_lines if isinstance(line, str) and line.strip()])
+            if picked:
+                return picked
+        return self.get_dialog_by_intimacy(intimacy)
 
     def get_levelup_dialog(self) -> str:
         return self._pick("levelup")

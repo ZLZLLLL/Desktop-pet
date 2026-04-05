@@ -8,9 +8,9 @@ class Intimacy:
     LEVEL_UNLOCKS = {
         1: ["sleep", "click"],
         2: ["sleep", "click", "run"],
-        3: ["sleep", "click", "run", "jump"],
-        4: ["sleep", "click", "run", "jump"],
-        5: ["sleep", "click", "run", "jump", "levelup"],
+        3: ["sleep", "click", "run", "jump", "impactball"],
+        4: ["sleep", "click", "run", "jump", "impactball", "kungfu"],
+        5: ["sleep", "click", "run", "jump", "impactball", "kungfu", "levelup"],
     }
     LEVEL_NAMES = {
         1: "陌生人",
@@ -30,6 +30,9 @@ class Intimacy:
     def add_double_click_intimacy(self) -> tuple[int, bool]:
         self._dm.increment_clicks(delta=2)
         return self._dm.add_intimacy(2)
+
+    def add_feed_intimacy(self) -> tuple[int, bool]:
+        return self._dm.add_intimacy(10)
 
     def add_daily_bonus(self) -> tuple[int, bool]:
         today = date.today().isoformat()

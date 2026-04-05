@@ -11,6 +11,10 @@
     "run":     { "fps": 4, "loop": false, "play_times": 3 },
     "jump":    { "fps": 4, "loop": false, "play_times": 3 },
     "click":   { "fps": 4, "loop": false, "play_times": 3 },
-    "levelup": { "fps": 3, "loop": false, "play_times": 2 }
+    "levelup": { "fps": 3, "loop": false, "play_times": 2 },
+    "impactball": { "fps": 1, "loop": false, "play_times": 1 },
+    "kungfu":     { "fps": 1, "loop": false, "play_times": 1 },
+    "fight":      { "fps": 1, "loop": false, "play_times": 1 },
+    "victory":    { "fps": 1, "loop": false, "play_times": 1 }
   }
 }
