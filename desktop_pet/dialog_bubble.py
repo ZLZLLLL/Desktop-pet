@@ -1,5 +1,6 @@
 import json
 import random
+from datetime import datetime
 from pathlib import Path
 
 
@@ -80,4 +81,17 @@ class DialogBubble:
         return self._pick("drag")
 
     def get_daily_first_dialog(self) -> str:
+        hour = datetime.now().hour
+        if 5 <= hour < 11:
+            key = "daily_morning"
+        elif 11 <= hour < 13:
+            key = "daily_noon"
+        elif 13 <= hour < 19:
+            key = "daily_afternoon"
+        else:
+            key = "daily_evening"
+
+        text = self._pick(key)
+        if text:
+            return text
         return self._pick("daily_first")

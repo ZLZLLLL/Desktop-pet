@@ -593,7 +593,19 @@ class PetWindow(QWidget):
         action_victory.triggered.connect(self._do_victory)
         menu.addAction(action_victory)
 
+        menu.addSeparator()
+        action_quit = QAction("退出程序", self)
+        action_quit.triggered.connect(self._quit_app)
+        menu.addAction(action_quit)
+
         menu.exec(global_pos)
+
+    def _quit_app(self):
+        self.bubble.close()
+        self.close()
+        app = QApplication.instance()
+        if app is not None:
+            app.quit()
 
     def _update_bubble_position(self):
         if self.bubble.isVisible():
