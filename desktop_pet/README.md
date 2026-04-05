@@ -61,6 +61,46 @@ python main.py
 - 在桌宠本体上点击右键，选择“退出程序”。
 - 或在系统托盘（任务栏右侧展开区）右键项目图标，选择“退出”。
 
+## 打包发布（Windows）
+
+### 一键打包
+
+1. 先安装依赖（仅首次需要）：
+
+```bash
+pip install -r requirements.txt
+pip install pyinstaller
+```
+
+2. 双击 `build_release.bat` 或命令行执行：
+
+```powershell
+.\build_release.bat
+```
+
+3. 打包产物：`dist/DesktopPet.exe`
+
+### 打包配置说明
+
+- `DesktopPet.spec` 已预置资源打包项：
+  - `assets/`
+  - `config.json`
+  - `dialogs.json`
+  - `save_data.json`
+- 可选图标：将 `app.ico` 放在项目根目录后重新执行 `build_release.bat`，会自动写入 EXE 图标。
+- 版本信息：`version_info.txt` 会自动写入 EXE 文件属性。
+
+### 生成安装包（可选）
+
+1. 安装 Inno Setup（并确保 `ISCC` 在 PATH 中）。
+2. 执行：
+
+```powershell
+.\build_installer.bat
+```
+
+3. 产物位置：`installer/DesktopPet-Setup.exe`
+
 ## 资源说明
 
 - 动画帧目录位于 `assets/` 下，按动作分文件夹组织。
