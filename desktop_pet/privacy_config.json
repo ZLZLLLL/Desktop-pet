@@ -1,0 +1,6 @@
+{
+  "lark": {
+    "identity": "user",
+    "assignee_open_id": "此处填写open_id，可以使用 lark-cli auth status 命令获取"
+  }
+}

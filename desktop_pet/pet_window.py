@@ -11,7 +11,10 @@ from PyQt6.QtGui import QPixmap, QColor, QFont, QPainter, QPalette, QEnterEvent,
 from state_machine import StateMachine
 from intimacy import Intimacy
 from dialog_bubble import DialogBubble
+from add_todo_bubble import AddTodoBubble
 from data_manager import DataManager
+from interactive_todo_bubble import InteractiveTodoBubble
+from lark_todo_service import LarkTaskCompleterThread, LarkTaskCreatorThread, LarkTaskFetcherThread
 
 
 def _remove_dwm_shadow(hwnd):
@@ -209,6 +212,8 @@ class PetWindow(QWidget):
 
         # Bubble
         self.bubble = BubbleLabel()
+        self.interactive_todo_bubble = InteractiveTodoBubble()
+        self.add_todo_bubble = AddTodoBubble()
         self._bubble_timer = QTimer()
         self._bubble_timer.setSingleShot(True)
         self._bubble_timer.setInterval(1500)
@@ -222,6 +227,15 @@ class PetWindow(QWidget):
         self._feed_timer = QTimer()
         self._feed_timer.setInterval(60)
         self._feed_timer.timeout.connect(self._follow_mouse_when_feeding)
+
+        self._lark_task_fetcher_thread = LarkTaskFetcherThread(self)
+        self._lark_task_fetcher_thread.tasks_ready.connect(self._on_lark_tasks_ready)
+        self._lark_task_fetcher_thread.result_ready.connect(self._on_lark_tasks_text)
+        self._lark_task_completer_threads: list[LarkTaskCompleterThread] = []
+        self._lark_task_creator_threads: list[LarkTaskCreatorThread] = []
+
+        self.interactive_todo_bubble.task_checked_signal.connect(self._on_interactive_task_checked)
+        self.add_todo_bubble.submit_signal.connect(self._on_add_todo_submit)
 
         # 初始化完成后在 showEvent 中再启动动画，避免窗口创建阶段设置 mask
 
@@ -577,6 +591,14 @@ class PetWindow(QWidget):
         action_status.triggered.connect(self._show_intimacy_status)
         menu.addAction(action_status)
 
+        action_todo = QAction("查看待办", self)
+        action_todo.triggered.connect(self._on_view_lark_todos_clicked)
+        menu.addAction(action_todo)
+
+        action_add_todo = QAction("添加待办", self)
+        action_add_todo.triggered.connect(self._on_add_todo)
+        menu.addAction(action_add_todo)
+
         action_impactball = QAction("冲击球", self)
         action_impactball.triggered.connect(self._do_impactball)
         menu.addAction(action_impactball)
@@ -601,11 +623,91 @@ class PetWindow(QWidget):
         menu.exec(global_pos)
 
     def _quit_app(self):
+        if self._lark_task_fetcher_thread.isRunning():
+            self._lark_task_fetcher_thread.requestInterruption()
+            self._lark_task_fetcher_thread.wait(1000)
+        for thread in list(self._lark_task_completer_threads):
+            if thread.isRunning():
+                thread.requestInterruption()
+                thread.wait(1000)
+        for thread in list(self._lark_task_creator_threads):
+            if thread.isRunning():
+                thread.requestInterruption()
+                thread.wait(1000)
+        self.interactive_todo_bubble.close()
+        self.add_todo_bubble.close()
         self.bubble.close()
         self.close()
         app = QApplication.instance()
         if app is not None:
             app.quit()
+
+    def _on_view_lark_todos_clicked(self):
+        if self._lark_task_fetcher_thread.isRunning():
+            return
+        self._lark_task_fetcher_thread.start()
+
+    def _on_add_todo(self):
+        self.add_todo_bubble.show_above_pet(self.geometry())
+
+    def _on_add_todo_submit(self, summary: str, due_str: str):
+        if not summary:
+            self._show_bubble("请输入待办标题")
+            return
+
+        self._show_bubble("正在添加到飞书...")
+        creator = LarkTaskCreatorThread(summary, due_str, self)
+        creator.created.connect(self._on_create_todo_done)
+        creator.finished.connect(lambda: self._cleanup_creator_thread(creator))
+        self._lark_task_creator_threads.append(creator)
+        creator.start()
+
+    def _on_lark_tasks_ready(self, tasks):
+        if not tasks:
+            self.interactive_todo_bubble.hide()
+            return
+        self.interactive_todo_bubble.show_tasks(tasks, self.geometry())
+
+    def _on_lark_tasks_text(self, text: str):
+        if "查询失败" in text or "太棒啦" in text:
+            self._show_bubble(text)
+
+    def _on_interactive_task_checked(self, guid: str):
+        if not guid:
+            self._show_bubble("该任务缺少 guid，暂时无法完成")
+            return
+
+        completer = LarkTaskCompleterThread(guid, self)
+        completer.completed.connect(self._on_task_complete_done)
+        completer.finished.connect(lambda: self._cleanup_completer_thread(completer))
+        self._lark_task_completer_threads.append(completer)
+        completer.start()
+
+    def _cleanup_completer_thread(self, thread: LarkTaskCompleterThread):
+        if thread in self._lark_task_completer_threads:
+            self._lark_task_completer_threads.remove(thread)
+        thread.deleteLater()
+
+    def _cleanup_creator_thread(self, thread: LarkTaskCreatorThread):
+        if thread in self._lark_task_creator_threads:
+            self._lark_task_creator_threads.remove(thread)
+        thread.deleteLater()
+
+    def _on_task_complete_done(self, guid: str, success: bool, message: str):
+        if success:
+            if "victory" in self._animations and self._animations["victory"]:
+                self._start_animation("victory", force_loop=False, force_play_times=1, force_fps=2)
+            self._show_bubble("待办已完成！")
+        else:
+            self._show_bubble(f"完成失败：{message}")
+
+    def _on_create_todo_done(self, success: bool, message: str):
+        if success:
+            self._show_bubble("添加成功！")
+            if not self._lark_task_fetcher_thread.isRunning():
+                self._lark_task_fetcher_thread.start()
+        else:
+            self._show_bubble(f"添加失败：{message}")
 
     def _update_bubble_position(self):
         if self.bubble.isVisible():
@@ -613,6 +715,8 @@ class PetWindow(QWidget):
             bx = pos.x() + self.width() // 2 - self.bubble.width() // 2
             by = pos.y()
             self.bubble.move(bx, by - self.bubble.height() - 10)
+        self.interactive_todo_bubble.update_position(self.geometry())
+        self.add_todo_bubble.update_position(self.geometry())
 
     def _do_impactball(self):
         if "impactball" in self._animations and self._animations["impactball"]:
